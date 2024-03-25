@@ -21,8 +21,8 @@ func createWebView(container: UIView, WKSMH: WKScriptMessageHandler, WKND: WKNav
     config.allowsInlineMediaPlayback = true
     config.preferences.javaScriptCanOpenWindowsAutomatically = true
     config.preferences.setValue(true, forKey: "standalone")
-    
-    let webView = WKWebView(frame: calcWebviewFrame(webviewView: container, toolbarView: nil), configuration: config)
+    let bottomInsert: CGFloat = 15   // переменная для нижнего отступа от края экрана
+    let webView = WKWebView(frame: calcWebviewFrame(webviewView: container, toolbarView: nil, bottomInsert: bottomInsert), configuration: config)
     
     setCustomCookie(webView: webView)
 
@@ -49,7 +49,18 @@ func createWebView(container: UIView, WKSMH: WKScriptMessageHandler, WKND: WKNav
     }
     #endif
     
+    disableScrollViewsSubviews(webView)
+    
     return webView
+}
+
+func disableScrollViewsSubviews(_ view: UIView) {  //убираем скролл из обертки
+    if let scrollView = view as? UIScrollView {
+        scrollView.isScrollEnabled = false
+    }
+    for subview in view.subviews {
+        disableScrollViewsSubviews(subview)
+    }
 }
 
 func setAppStoreAsReferrer(contentController: WKUserContentController) {
@@ -72,9 +83,9 @@ func setCustomCookie(webView: WKWebView) {
 
 }
 
-func calcWebviewFrame(webviewView: UIView, toolbarView: UIToolbar?) -> CGRect{
+func calcWebviewFrame(webviewView: UIView, toolbarView: UIToolbar?, bottomInsert: CGFloat = 0) -> CGRect{
     if ((toolbarView) != nil) {
-        return CGRect(x: 0, y: toolbarView!.frame.height, width: webviewView.frame.width, height: webviewView.frame.height - toolbarView!.frame.height)
+        return CGRect(x: 0, y: toolbarView!.frame.height, width: webviewView.frame.width, height: webviewView.frame.height - toolbarView!.frame.height - bottomInsert)
     }
     else {
         let winScene = UIApplication.shared.connectedScenes.first
@@ -89,12 +100,12 @@ func calcWebviewFrame(webviewView: UIView, toolbarView: UIToolbar?) -> CGRect{
                     titlebar.toolbar = nil
                 }
             #endif
-            return CGRect(x: 0, y: 0, width: webviewView.frame.width, height: webviewView.frame.height)
+            return CGRect(x: 0, y: 0, width: webviewView.frame.width, height: webviewView.frame.height - bottomInsert)
         default:
             #if targetEnvironment(macCatalyst)
             statusBarHeight = 29
             #endif
-            let windowHeight = webviewView.frame.height - statusBarHeight
+            let windowHeight = webviewView.frame.height - statusBarHeight - bottomInsert
             return CGRect(x: 0, y: statusBarHeight, width: webviewView.frame.width, height: windowHeight)
         }
     }
@@ -110,59 +121,79 @@ extension ViewController: WKUIDelegate, WKDownloadDelegate {
     }
     // restrict navigation to target host, open external links in 3rd party apps
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if (navigationAction.request.url?.scheme == "about") {
+        if (navigationAction.request.url?.scheme == "about" || navigationAction.request.url?.scheme == "blob") {
             return decisionHandler(.allow)
         }
-        if (navigationAction.shouldPerformDownload || navigationAction.request.url?.scheme == "blob") {
+        if (navigationAction.shouldPerformDownload) {
             return decisionHandler(.download)
         }
-
         if let requestUrl = navigationAction.request.url{
             if let requestHost = requestUrl.host {
-                // NOTE: Match auth origin first, because host origin may be a subset of auth origin and may therefore always match
-                let matchingAuthOrigin = authOrigins.first(where: { requestHost.range(of: $0) != nil })
-                if (matchingAuthOrigin != nil) {
-                    decisionHandler(.allow)
-                    if (toolbarView.isHidden) {
-                        toolbarView.isHidden = false
-                        webView.frame = calcWebviewFrame(webviewView: webviewView, toolbarView: toolbarView)
-                    }
-                    return
-                }
-
                 let matchingHostOrigin = allowedOrigins.first(where: { requestHost.range(of: $0) != nil })
                 if (matchingHostOrigin != nil) {
-                    // Open in main webview
-                    decisionHandler(.allow)
+                    if requestUrl.absoluteString.hasPrefix("https://accounts.google.com/gsi/select?client") || requestUrl.absoluteString.hasPrefix("https://webpos.izipoint.by") ||
+                        requestUrl.absoluteString.hasPrefix("https://sandbox.pay.yandex.ru/web/form?abuid=") ||
+                        requestUrl.absoluteString.hasPrefix("https://pay.yandex.ru/web/form?abuid=") {
+                        decisionHandler(.allow)
+                    } else if requestUrl.absoluteString.hasPrefix("https://wa.me") ||
+                                requestUrl.absoluteString.hasPrefix("https://t.me") ||
+                                requestUrl.absoluteString.hasPrefix("https://izipoint.by") {
+                        UIApplication.shared.open(requestUrl)
+                        decisionHandler(.cancel)
+                    } else if requestUrl.absoluteString.hasPrefix("bank") {
+                        if let url = URL(string: requestUrl.absoluteString) {
+                            let options: [UIApplication.OpenExternalURLOptionsKey: Any] = [:]
+                            UIApplication.shared.open(url, options: options) { success in
+                                if success {
+                                    decisionHandler(.cancel)
+                                } else {
+                                    decisionHandler(.cancel)
+                                }
+                            }
+                        }
+                    } else {
+                        // Open in main webview
+                        decisionHandler(.allow)
+                    }
                     if (!toolbarView.isHidden) {
                         toolbarView.isHidden = true
                         webView.frame = calcWebviewFrame(webviewView: webviewView, toolbarView: nil)
                     }
-                    return
-                }
-                if (navigationAction.navigationType == .other &&
-                    navigationAction.value(forKey: "syntheticClickType") as! Int == 0 &&
-                    (navigationAction.targetFrame != nil) &&
-                    // no error here, fake warning
-                    (navigationAction.sourceFrame != nil)
-                ) {
-                    decisionHandler(.allow)
-                    return
-                }
-                else {
-                    decisionHandler(.cancel)
-                }
-
-
-                if ["http", "https"].contains(requestUrl.scheme?.lowercased() ?? "") {
-                    // Can open with SFSafariViewController
-                    let safariViewController = SFSafariViewController(url: requestUrl)
-                    self.present(safariViewController, animated: true, completion: nil)
+                    
                 } else {
-                    // Scheme is not supported or no scheme is given, use openURL
-                    if (UIApplication.shared.canOpenURL(requestUrl)) {
-                        UIApplication.shared.open(requestUrl)
+                    let matchingAuthOrigin = authOrigins.first(where: { requestHost.range(of: $0) != nil })
+                    if (matchingAuthOrigin != nil) {
+                        decisionHandler(.allow)
+                        if (toolbarView.isHidden) {
+                            toolbarView.isHidden = false
+                            webView.frame = calcWebviewFrame(webviewView: webviewView, toolbarView: toolbarView)
+                        }
+                        return
                     }
+                    else {
+                        if (navigationAction.navigationType == .other &&
+                            navigationAction.value(forKey: "syntheticClickType") as! Int == 0 &&
+                            (navigationAction.targetFrame != nil) &&
+                            // no error here, fake warning
+                            (navigationAction.sourceFrame != nil)
+                        ) {
+                            if requestUrl.absoluteString.hasPrefix("https://sandbox.pay.yandex.ru/web/form?abuid=") ||
+                                  requestUrl.absoluteString.hasPrefix("https://pay.yandex.ru/web/form?abuid=") {
+                                UIApplication.shared.open(requestUrl)
+                                decisionHandler(.cancel)
+                            } else if requestUrl.absoluteString.hasPrefix("https://accounts.google.com") {
+                            } else if requestUrl.absoluteString.hasPrefix("https://izipoint.by/") {
+                                decisionHandler(.cancel)
+                            } else {
+                                decisionHandler(.allow)
+                                return
+                            }
+                        }
+                        else {
+                            decisionHandler(.cancel)
+                        }
+                    }
+
                 }
             } else {
                 decisionHandler(.cancel)
@@ -185,7 +216,7 @@ extension ViewController: WKUIDelegate, WKDownloadDelegate {
         else {
             decisionHandler(.cancel)
         }
-
+        
     }
     // Handle javascript: `window.alert(message: String)`
     func webView(_ webView: WKWebView,

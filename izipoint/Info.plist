@@ -94,10 +94,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>WKAppBoundDomains</key>
-	<array>
-		<string>webpos.izipoint.by/?utm_source=homescreen</string>
-	</array>
+    
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
